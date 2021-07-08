@@ -1,0 +1,9 @@
+name = "AnnDatas"
+uuid = "e9313bdf-a8f1-42f8-9c29-19eb0565f8e4"
+authors = ["Daniel C. Jones <dcjones3@fredhutch.org>"]
+version = "0.1.0"
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
