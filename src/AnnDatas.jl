@@ -9,7 +9,7 @@ export AnnData
 
 
 struct AnnData
-    X::SparseMatrixCSC
+    X::AbstractMatrix
     obsm::Union{Nothing, Dict{String, Any}}
     obsp::Union{Nothing, Dict{String, Any}}
     uns::Union{Nothing, Dict{String, Any}}
@@ -123,6 +123,58 @@ function Base.read(filename::AbstractString, ::Type{AnnData})
     close(input)
 
     return AnnData(X, obsm, obsp, uns, obs, var)
+end
+
+
+function write_anndata_group(output, name, df::Nothing)
+end
+
+
+function write_anndata_group(output, name, df::DataFrame)
+    grp = create_group(output, name)
+    attr = attributes(grp)
+    attr["encoding-version"] = "0.1.0"
+    attr["encoding-type"] = "dataframe"
+
+    has_index = false
+    column_order = String[]
+    for name in names(df)
+        grp[name] = df[!,name]
+        if name != "_index"
+            push!(column_order, name)
+        else
+            has_index = true
+        end
+    end
+    attr["column-order"] = column_order
+    attr["_index"] = "_index"
+
+    if !has_index
+        n = size(df, 1)
+        grp["_index"] = String[string(i-1) for i in 1:n]
+    end
+
+    return grp
+end
+
+
+function write_anndata_group(output, name, df::Dict)
+    grp = create_group(output, name)
+    for (k, v) in df
+        grp[k] = v
+    end
+end
+
+
+function Base.write(filename::AbstractString, adata::AnnData)
+    h5open(filename, "w") do output
+        output["X"] = adata.X
+        write_anndata_group(output, "obsm", adata.obsm)
+        write_anndata_group(output, "obsp", adata.obsp)
+        write_anndata_group(output, "uns", adata.uns)
+        write_anndata_group(output, "obs", adata.obs)
+        write_anndata_group(output, "var", adata.var)
+    end
 end
 
 
