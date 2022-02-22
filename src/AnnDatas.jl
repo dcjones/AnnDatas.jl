@@ -18,6 +18,17 @@ struct AnnData
 end
 
 
+# h5py will read variable length strings as an 'str', but fixed length strings
+# as bytes. Julia writes fixed length string, and this ends up causing problems
+# sometimes.
+#= function vlenstr(s::String)
+    # [HDF5.UTF8Char(c) for c in Vector{UInt8}("csr_matrix")]
+    [HDF5.UTF8Char(c) for c in Vector{Char}(Vector{UInt8}("csr_matrix")]
+    # return Vector{Char}("csr_matrix")
+    # return String["csr_matrix"]
+end =#
+
+
 """
 Read a CSR matrix in a SparseMatrixCSC
 """
@@ -46,6 +57,22 @@ function read_csr_matrix(g::HDF5.Group)
 end
 
 
+function write_csc_matrix(output, X::SparseMatrixCSC)
+    grp = create_group(output, "X")
+    attr = attributes(grp)
+    # attr["encoding-type"] = vlenstr("csr_matrix")
+    attr["encoding-type"] = "csr_matrix"
+    attr["encoding-version"] = "0.1.0"
+    attr["shape"] = Int[size(X,1), size(X,2)]
+
+    Xt = SparseMatrixCSC(transpose(X))
+
+    grp["data"] = Xt.nzval
+    grp["indices"] = Xt.rowval
+    grp["indptr"] = Xt.colptr
+end
+
+
 """
 Read a serialized data frame into a DataFrame
 """
@@ -58,13 +85,26 @@ function read_dataframe(input::HDF5.File, path::String)
     columns = Dict{String, Any}()
     attr = attributes(g)
     @assert read(attr["encoding-type"]) == "dataframe"
-    columnorder = read(attr["column-order"])
+    columnorder = Vector{String}(read(attr["column-order"]))
 
     for key in keys(g)
+        if key ∉ columnorder
+            pushfirst!(columnorder, key)
+        end
         columns[key] = read(g[key])
     end
     df = DataFrame(Dict(key => columns[key] for key in columnorder))
-    df[!,"_index"] = read(g["_index"])
+    if haskey(g, "_index")
+        df[!,"_index"] = read(g["_index"])
+    end
+
+    if haskey(g, "__categories")
+        cats = g["__categories"]
+        for key in keys(cats)
+            values = read(cats[key])
+            df[!,key] = [i < 1 ? missing : values[i] for i in df[!,key]]
+        end
+    end
 
     return df
 end
@@ -168,7 +208,11 @@ end
 
 function Base.write(filename::AbstractString, adata::AnnData)
     h5open(filename, "w") do output
-        output["X"] = adata.X
+        if isa(adata.X, SparseMatrixCSC)
+            write_csc_matrix(output, adata.X)
+        else
+            output["X"] = adata.X
+        end
         write_anndata_group(output, "obsm", adata.obsm)
         write_anndata_group(output, "obsp", adata.obsp)
         write_anndata_group(output, "uns", adata.uns)
