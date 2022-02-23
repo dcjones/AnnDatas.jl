@@ -88,7 +88,7 @@ function read_dataframe(input::HDF5.File, path::String)
     columnorder = Vector{String}(read(attr["column-order"]))
 
     for key in keys(g)
-        if key ∉ columnorder
+        if key != "__categories" && key ∉ columnorder
             pushfirst!(columnorder, key)
         end
         columns[key] = read(g[key])
@@ -102,7 +102,7 @@ function read_dataframe(input::HDF5.File, path::String)
         cats = g["__categories"]
         for key in keys(cats)
             values = read(cats[key])
-            df[!,key] = [i < 1 ? missing : values[i] for i in df[!,key]]
+            df[!,key] = [i+1 < 1 ? missing : values[i+1] for i in df[!,key]]
         end
     end
 
