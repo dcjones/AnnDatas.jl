@@ -9,7 +9,7 @@ export AnnData
 
 
 struct AnnData
-    X::AbstractMatrix
+    X::Union{Nothing, AbstractMatrix}
     obsm::Union{Nothing, Dict{String, Any}}
     obsp::Union{Nothing, Dict{String, Any}}
     uns::Union{Nothing, Dict{String, Any}}
@@ -18,15 +18,92 @@ struct AnnData
 end
 
 
-# h5py will read variable length strings as an 'str', but fixed length strings
-# as bytes. Julia writes fixed length string, and this ends up causing problems
-# sometimes.
-#= function vlenstr(s::String)
-    # [HDF5.UTF8Char(c) for c in Vector{UInt8}("csr_matrix")]
-    [HDF5.UTF8Char(c) for c in Vector{Char}(Vector{UInt8}("csr_matrix")]
-    # return Vector{Char}("csr_matrix")
-    # return String["csr_matrix"]
-end =#
+
+function Base.copy(adata::AnnData)
+    return AnnData(adata.X, adata.obsm, adata.obsp, adata.uns, adata.obs, adata.var)
+end
+
+
+function Base.size(adata::AnnData)
+    return size(adata.X)
+end
+
+function Base.size(adata::AnnData, i::Integer)
+    return size(adata.X, i)
+end
+
+
+function show_keys(io::IO, d::DataFrame)
+    join(io, names(d), ", ")
+end
+
+function show_keys(io::IO, d::Dict{String, Any})
+    join(io, keys(d), ", ")
+end
+
+
+function Base.show(io::IO, adata::AnnData)
+    m, n = size(adata)
+    println(io, "AnnData with n_obs × n_var = $(m) × $(n)")
+    for field in fieldnames(AnnData)
+        val = getfield(adata, field)
+        if field != :X && val !== nothing
+            print(io, "  ", string(field), ": ")
+            show_keys(io, val)
+            println(io)
+        end
+    end
+end
+
+
+# Indexing helper to index dictionary fields
+function _getindex(d::Matrix, idx)
+    return d[:,idx]
+end
+
+function _getindex(d::Dict, idx)
+    return Dict(k => _getindex(v, idx) for (k,v) in d)
+end
+
+function _getindex(d::DataFrame, idx)
+    return d[idx,:]
+end
+
+function _getindex(d::Nothing, idx)
+    return nothing
+end
+
+function Base.getindex(adata::AnnData, rows, cols_)
+    # index by gene name
+    if eltype(cols_) <: String
+        index = Dict(g => i for (i,g) in enumerate(adata.var._index))
+        cols = [index[g] for g in cols_]
+    else
+        cols = cols_
+    end
+
+    return AnnData(
+        adata.X[rows, cols],
+        _getindex(adata.obsm, rows),
+        _getindex(adata.obsp, rows),
+        adata.uns,
+        _getindex(adata.obs, rows),
+        _getindex(adata.var, cols))
+end
+
+
+function write_vlenstr_attribute(parent, name, s::String)
+    dtype = HDF5.API.h5t_copy(HDF5.API.H5T_C_S1)
+    HDF5.API.h5t_set_size(dtype, HDF5.API.H5T_VARIABLE)
+    HDF5.API.h5t_set_cset(dtype, HDF5.API.H5T_CSET_UTF8)
+    dspace = HDF5.API.h5s_create(HDF5.API.H5S_SCALAR)
+    dset = create_attribute(parent, name, HDF5.Datatype(dtype), HDF5.Dataspace(dspace))
+
+    strbuf = Base.cconvert(Cstring, s)
+    ptr = pointer([pointer(strbuf)])
+
+    HDF5.h5a_write(dset, dtype, ptr)
+end
 
 
 """
@@ -34,7 +111,7 @@ Read a CSR matrix in a SparseMatrixCSC
 """
 function read_csr_matrix(g::HDF5.Group)
     attr = attributes(g)
-    @assert read(attr["encoding-type"]) == "csr_matrix"
+    # @assert read(attr["encoding-type"]) == "csr_matrix"
     m, n = read(attr["shape"])
 
     V           = read(g["data"])
@@ -59,10 +136,10 @@ end
 
 function write_csc_matrix(output, X::SparseMatrixCSC)
     grp = create_group(output, "X")
+
+    write_vlenstr_attribute(grp, "encoding-type", "csr_matrix")
+    write_vlenstr_attribute(grp, "encoding-version", "0.1.0")
     attr = attributes(grp)
-    # attr["encoding-type"] = vlenstr("csr_matrix")
-    attr["encoding-type"] = "csr_matrix"
-    attr["encoding-version"] = "0.1.0"
     attr["shape"] = Int[size(X,1), size(X,2)]
 
     Xt = SparseMatrixCSC(transpose(X))
@@ -150,9 +227,18 @@ function Base.read(filename::AbstractString, ::Type{AnnData})
     input = h5open(filename)
 
     if isa(input["X"], HDF5.Group)
-        X = read_csr_matrix(input["X"])
+        enc = read(attributes(input["X"])["encoding-type"])
+        if enc == "csr_matrix"
+            X = read_csr_matrix(input["X"])
+        elseif enc == "csc_matrix"
+            # X = transpose(read_csr_matrix(input["X"]))
+            # TODO: support CSC matrix
+            X = nothing
+        else
+            error("Unsupported matrix encoding $(enc)")
+        end
     else
-        X = read(input["X"])
+        X = Matrix(transpose(read(input["X"])))
     end
     obsm = read_group(input, "obsm")
     obsp = read_group(input, "obsp")
@@ -173,6 +259,11 @@ end
 function write_anndata_group(output, name, df::DataFrame)
     grp = create_group(output, name)
     attr = attributes(grp)
+
+    # TODO: because pyh5 is dumb as shit, we need to write these as variable
+    # length strings. Othrewise they are read as bytes trings an a bunch
+    # of equality tests fail.
+
     attr["encoding-version"] = "0.1.0"
     attr["encoding-type"] = "dataframe"
 
@@ -201,7 +292,11 @@ end
 function write_anndata_group(output, name, df::Dict)
     grp = create_group(output, name)
     for (k, v) in df
-        grp[k] = v
+        if isa(v, Dict)
+            write_anndata_group(grp, k, v)
+        else
+            grp[k] = v
+        end
     end
 end
 
