@@ -145,8 +145,8 @@ function write_csc_matrix(output, X::SparseMatrixCSC)
     Xt = SparseMatrixCSC(transpose(X))
 
     grp["data"] = Xt.nzval
-    grp["indices"] = Xt.rowval
-    grp["indptr"] = Xt.colptr
+    grp["indices"] = Xt.rowval .- 1
+    grp["indptr"] = Xt.colptr .- 1
 end
 
 
