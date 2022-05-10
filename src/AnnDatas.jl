@@ -15,6 +15,7 @@ struct AnnData
     uns::Union{Nothing, Dict{String, Any}}
     obs::Union{Nothing, DataFrame}
     var::Union{Nothing, DataFrame}
+    layers::Union{Nothing, Dict{String, AbstractMatrix}}
 end
 
 
@@ -37,7 +38,7 @@ function show_keys(io::IO, d::DataFrame)
     join(io, names(d), ", ")
 end
 
-function show_keys(io::IO, d::Dict{String, Any})
+function show_keys(io::IO, d::Dict)
     join(io, keys(d), ", ")
 end
 
@@ -57,12 +58,16 @@ end
 
 
 # Indexing helper to index dictionary fields
-function _getindex(d::Matrix, idx)
+function _getindex(d::AbstractMatrix, idx)
     return d[:,idx]
 end
 
 function _getindex(d::Dict, idx)
     return Dict(k => _getindex(v, idx) for (k,v) in d)
+end
+
+function _getindex(d::Dict, rows, cols)
+    return Dict(k => v[rows, cols] for (k,v) in d)
 end
 
 function _getindex(d::DataFrame, idx)
@@ -88,7 +93,8 @@ function Base.getindex(adata::AnnData, rows, cols_)
         _getindex(adata.obsp, rows),
         adata.uns,
         _getindex(adata.obs, rows),
-        _getindex(adata.var, cols))
+        _getindex(adata.var, cols),
+        _getindex(adata.layers, rows, cols))
 end
 
 
@@ -220,35 +226,54 @@ function read_group(input::HDF5.File, path::String)
 end
 
 
-"""
-Read an AnnData struct from the given h5ad filename.
-"""
-function Base.read(filename::AbstractString, ::Type{AnnData})
-    input = h5open(filename)
-
-    if isa(input["X"], HDF5.Group)
-        enc = read(attributes(input["X"])["encoding-type"])
+function read_matrix(parent, path::String)
+    if isa(parent[path], HDF5.Group)
+        enc = read(attributes(parent[path])["encoding-type"])
         if enc == "csr_matrix"
-            X = read_csr_matrix(input["X"])
+            X = read_csr_matrix(parent[path])
         elseif enc == "csc_matrix"
-            # X = transpose(read_csr_matrix(input["X"]))
+            # X = transpose(read_csr_matrix(parent["X"]))
             # TODO: support CSC matrix
             X = nothing
         else
             error("Unsupported matrix encoding $(enc)")
         end
     else
-        X = Matrix(transpose(read(input["X"])))
+        X = Matrix(transpose(read(parent[path])))
     end
-    obsm = read_group(input, "obsm")
-    obsp = read_group(input, "obsp")
-    uns  = read_group(input, "uns")
-    obs  = read_dataframe(input, "obs")
-    var  = read_dataframe(input, "var")
+end
+
+
+function read_layers(parent, path::String)
+    layers = Dict{String, AbstractMatrix}()
+    g = parent[path]
+    for key in keys(g)
+        layers[key] = read_matrix(g, key)
+    end
+    return layers
+end
+
+# TODO: writing `layers`
+
+
+
+"""
+Read an AnnData struct from the given h5ad filename.
+"""
+function Base.read(filename::AbstractString, ::Type{AnnData})
+    input = h5open(filename)
+    X = read_matrix(input, "X")
+
+    obsm   = read_group(input, "obsm")
+    obsp   = read_group(input, "obsp")
+    uns    = read_group(input, "uns")
+    obs    = read_dataframe(input, "obs")
+    var    = read_dataframe(input, "var")
+    layers = read_layers(input, "layers")
 
     close(input)
 
-    return AnnData(X, obsm, obsp, uns, obs, var)
+    return AnnData(X, obsm, obsp, uns, obs, var, layers)
 end
 
 
