@@ -62,6 +62,10 @@ function _getindex(d::AbstractMatrix, idx)
     return d[:,idx]
 end
 
+function _getindex(d::AbstractVector, idx)
+    return d[idx]
+end
+
 function _getindex(d::Dict, idx)
     return Dict(k => _getindex(v, idx) for (k,v) in d)
 end
@@ -75,6 +79,10 @@ function _getindex(d::DataFrame, idx)
 end
 
 function _getindex(d::Nothing, idx)
+    return nothing
+end
+
+function _getindex(d::Nothing, rows, cols)
     return nothing
 end
 
@@ -245,12 +253,16 @@ end
 
 
 function read_layers(parent, path::String)
-    layers = Dict{String, AbstractMatrix}()
-    g = parent[path]
-    for key in keys(g)
-        layers[key] = read_matrix(g, key)
+    if haskey(parent, path)
+        layers = Dict{String, AbstractMatrix}()
+        g = parent[path]
+        for key in keys(g)
+            layers[key] = read_matrix(g, key)
+        end
+        return layers
+    else
+        return nothing
     end
-    return layers
 end
 
 # TODO: writing `layers`
@@ -331,7 +343,7 @@ function Base.write(filename::AbstractString, adata::AnnData)
         if isa(adata.X, SparseMatrixCSC)
             write_csc_matrix(output, adata.X)
         else
-            output["X"] = adata.X
+            output["X"] = Matrix(transpose(adata.X))
         end
         write_anndata_group(output, "obsm", adata.obsm)
         write_anndata_group(output, "obsp", adata.obsp)
