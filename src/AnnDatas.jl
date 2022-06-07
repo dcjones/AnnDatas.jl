@@ -123,10 +123,14 @@ end
 """
 Read a CSR matrix in a SparseMatrixCSC
 """
-function read_csr_matrix(g::HDF5.Group)
+function read_csr_matrix(g::HDF5.Group, transposed::Bool=false)
     attr = attributes(g)
     # @assert read(attr["encoding-type"]) == "csr_matrix"
     m, n = read(attr["shape"])
+
+    if transposed
+        n, m = m, n
+    end
 
     V           = read(g["data"])
     csr_indices = read(g["indices"]) .+ 1
@@ -224,6 +228,7 @@ function read_group(input::HDF5.File, path::String)
             else
                 data[key] = read(dataset)
             end
+
             # TODO: special cases for other types of data
         else
             data[key] = read(dataset)
@@ -238,16 +243,14 @@ function read_matrix(parent, path::String)
     if isa(parent[path], HDF5.Group)
         enc = read(attributes(parent[path])["encoding-type"])
         if enc == "csr_matrix"
-            X = read_csr_matrix(parent[path])
+            return read_csr_matrix(parent[path])
         elseif enc == "csc_matrix"
-            # X = transpose(read_csr_matrix(parent["X"]))
-            # TODO: support CSC matrix
-            X = nothing
+            return SparseMatrixCSC(transpose(read_csr_matrix(parent[path], true)))
         else
             error("Unsupported matrix encoding $(enc)")
         end
     else
-        X = Matrix(transpose(read(parent[path])))
+        return Matrix(transpose(read(parent[path])))
     end
 end
 
@@ -307,7 +310,8 @@ function write_anndata_group(output, name, df::DataFrame)
     has_index = false
     column_order = String[]
     for name in names(df)
-        grp[name] = df[!,name]
+        col = df[!,name]
+        grp[name] = Vector{eltype(col)}(col)
         if name != "_index"
             push!(column_order, name)
         else
