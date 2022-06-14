@@ -21,7 +21,7 @@ end
 
 
 function Base.copy(adata::AnnData)
-    return AnnData(adata.X, adata.obsm, adata.obsp, adata.uns, adata.obs, adata.var)
+    return AnnData(adata.X, adata.obsm, adata.obsp, adata.uns, adata.obs, adata.var, adata.layers)
 end
 
 
@@ -183,10 +183,25 @@ function read_dataframe(input::HDF5.File, path::String)
     columnorder = Vector{String}(read(attr["column-order"]))
 
     for key in keys(g)
-        if key != "__categories" && key ∉ columnorder
+        if key == "__categories"
+            continue
+        end
+
+        if key ∉ columnorder
             pushfirst!(columnorder, key)
         end
-        columns[key] = read(g[key])
+
+        v = g[key]
+        if isa(v, HDF5.Group)
+            typ = read(attributes(v), "encoding-type")
+            if typ == "categorical"
+                columns[key] = read(v["categories"])[read(v["codes"]) .+ 1]
+            else
+                error("Unsupported encoding type: $(typ)")
+            end
+        else
+            columns[key] = read(v)
+        end
     end
     df = DataFrame(Dict(key => columns[key] for key in columnorder))
     if haskey(g, "_index")
@@ -220,6 +235,7 @@ function read_group(input::HDF5.File, path::String)
 
         if isa(dataset, HDF5.Group)
             attr = attributes(dataset)
+
             if length(attr) == 0
                 # data[key] = read_group(dataset)
                 data[key] = read(dataset)
