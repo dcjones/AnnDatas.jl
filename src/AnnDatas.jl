@@ -1,9 +1,9 @@
 module AnnDatas
 
+using CategoricalArrays
+using DataFrames
 using HDF5
 using SparseArrays
-using DataFrames
-
 
 export AnnData
 
@@ -17,7 +17,6 @@ struct AnnData
     var::Union{Nothing, DataFrame}
     layers::Union{Nothing, Dict{String, AbstractMatrix}}
 end
-
 
 
 function Base.copy(adata::AnnData)
@@ -195,7 +194,17 @@ function read_dataframe(input::HDF5.File, path::String)
         if isa(v, HDF5.Group)
             typ = read(attributes(v), "encoding-type")
             if typ == "categorical"
-                columns[key] = read(v["categories"])[read(v["codes"]) .+ 1]
+                categories = read(v["categories"])
+                codes = read(v["codes"]) .+ 1
+                ordered = read(attributes(v)["ordered"]) > 0
+
+                if any(codes .== 0)
+                    T = eltype(categories)
+                    columns[key] = Union{Missing, T}[(code == 0 ? missing : categories[code]) for code in codes]
+                else
+                    columns[key] = categories[codes]
+                end
+                columns[key] = CategoricalVector(columns[key], levels=categories, ordered=ordered)
             else
                 error("Unsupported encoding type: $(typ)")
             end
